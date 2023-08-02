@@ -1,0 +1,515 @@
+version: "3"
+services:
+  
+  # Cloudflare Tunnel to use as reverse proxy for external access to services
+  cloudflared-tunnel:
+    # Container
+    container_name: cloudflared-tunnel
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run
+    
+    # Environment
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+      
+    # Networking
+    network_mode: host
+    
+    # Config
+    restart: unless-stopped
+  
+  # Nextcloud
+  nextcloud:
+    # Container
+    container_name: nextcloud-aio-mastercontainer # This line is not allowed to be changed as otherwise AIO will not work correctly
+    image: nextcloud/all-in-one:latest
+      
+    # Environment
+    environment: 
+      # Needed to work on Cloudflare Tunnel
+      - APACHE_PORT=11000
+      - SKIP_DOMAIN_VALIDATION=true
+      - APACHE_IP_BINDING=0.0.0.0 
+      
+      # Config
+      - NEXTCLOUD_DATADIR=${NEXTCLOUD_DATADIR} # ⚠️⚠️⚠️ Warning: do not set or adjust this value after the initial Nextcloud installation is done!
+      - NEXTCLOUD_MEMORY_LIMIT=${NEXTCLOUD_MEMORY_LIMIT}
+      
+      # Prefs
+      - AIO_DISABLE_BACKUP_SECTION=true
+    
+    # Mounts
+    volumes:
+      - nextcloud_aio_mastercontainer:/mnt/docker-aio-config # This line is not allowed to be changed as otherwise the built-in backup solution will not work
+      - /var/run/docker.sock:/var/run/docker.sock:ro # If adjusting, don't forget to also set 'WATCHTOWER_DOCKER_SOCKET_PATH'!
+      
+    # Networking
+    ports:
+      - 8080:8080
+      
+    # Config
+    restart: unless-stopped
+    
+    
+  # Proton Mail Bridge
+  # SMTP server for Nextcloud
+  protonmail-bridge-nextcloud:
+    # Container
+    container_name: protonmail-bridge-nextcloud
+    image: shenxn/protonmail-bridge
+    command: init
+    depends_on:
+      - nextcloud
+    
+    # Enables user login from shell
+    tty: true
+    stdin_open: true 
+    
+    # Networking
+    ports:
+      - 1025:25/tcp
+      - 1143:143/tcp
+    networks: 
+      - nextcloud-aio
+      
+    # Config
+    restart: unless-stopped
+
+    
+  # Proton VPN Docker
+  # Creates a network service for connecting to Proton VPN
+  # Env PROTON_SERVER must be a user or system variable when running docker compose up
+  protonwire:
+    # Container
+    container_name: protonwire
+    image: ghcr.io/tprasadtp/protonwire:latest
+    init: true
+    cap_add:
+      - NET_ADMIN # mandatory!
+    
+    # Environment
+    environment:
+      - PROTONVPN_SERVER=${PROTON_SERVER}
+      - DEBUG="0"
+      - KILL_SWITCH="1"
+      
+    # Mounts
+    volumes:
+      - type: tmpfs
+        target: /tmp
+      - type: bind
+        source: private.key
+        target: /etc/protonwire/private-key
+        read_only: true
+        
+    # Networking
+    ports:
+      - 10025:25/tcp # SMTP
+      - 11043:143/tcp # IMAP
+      - 8000:80 # Caddy Proxy
+      - 5055:5055 # Jellyseerr
+      - 7878:7878 # Radarr
+      - 8989:8989 # Sonarr  
+      - 6767:6767 # Bazarr
+      - 8265:8265 # Tdarr
+      - 8888:8080 # qbittorrent
+      - 9117:9117 # Jackett
+      - 8299:8299 # Tdarr auth
+      
+    # Config
+    restart: unless-stopped
+    sysctls:
+      net.ipv4.conf.all.rp_filter: 2 # sysctl net.ipv4.conf.all.rp_filter is mandatory!
+      net.ipv6.conf.all.disable_ipv6: 1 # disables IPv6 as protonVPN does not support IPv6.
+    
+  # Caddy Reverse Proxy
+  # Used for:
+  # 1) Setting the endpoint for ip.domain.tld
+  # 2) Being the authentication layer for tdarr.domain.tld
+  caddy_proxy:
+    # Container
+    container_name: caddy_proxy
+    image: caddy:latest
+    
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes: 
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      
+    # Config
+    restart: unless-stopped
+    
+    
+  # Proton Mail Bridge
+  # SMTP server for services running on the VPN
+  protonmail-bridge-vpn:
+    # Container
+    container_name: protonmail-bridge-vpn
+    image: shenxn/protonmail-bridge
+    command: init
+    
+    # Enables user login from shell
+    tty: true
+    stdin_open: true 
+    
+    # Networking
+    network_mode: service:protonwire
+      
+    # Config
+    restart: unless-stopped
+    
+
+  # Jellyseerr
+  jellyseerr:
+    # Container
+    container_name: jellyseerr
+    image: fallenbagel/jellyseerr:latest
+    
+    # Environment
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TZ}
+      
+    # Networking
+    network_mode: service:protonwire
+      
+    # Mounts
+    volumes:
+      - /etc/docker/jellyseerr/config:/app/config
+      - ${MEDIA_DIR}:/media
+
+
+  # Jellyfin
+  jellyfin:
+    # Container
+    container_name: jellyfin
+    image: cr.hotio.dev/hotio/jellyfin
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      
+    # Networking
+    ports:
+      - 8096:8096
+      
+    # Mounts
+    volumes:
+      - /etc/docker/jellyfin/config:/config
+      - ${MEDIA_DIR}:/media
+      
+  # Radarr
+  radarr:
+    # Container
+    container_name: radarr
+    image: cr.hotio.dev/hotio/radarr
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/radarr/config:/config
+      - ${MEDIA_DIR}:/media
+      
+    # Config
+    restart: unless-stopped
+
+
+  # Sonarr
+  sonarr:
+    # Container
+    container_name: sonarr
+    image: cr.hotio.dev/hotio/sonarr
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/sonarr/config:/config
+      - ${MEDIA_DIR}:/media
+      
+    # Config
+    restart: unless-stopped
+
+
+  # Bazarr
+  bazarr:
+    # Container
+    container_name: bazarr
+    image: cr.hotio.dev/hotio/bazarr
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/bazarr/config:/config
+      - ${MEDIA_DIR}:/media
+      
+    # Config
+    restart: unless-stopped
+
+
+  # Jackett
+  jackett:
+    # Container
+    container_name: jackett
+    image: cr.hotio.dev/hotio/jackett
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/jackett/config:/config
+      - ${MEDIA_DIR}:/media
+      
+    # Config
+    restart: unless-stopped
+    
+
+  # qbittorrent
+  qbittorrent:
+    # Container
+    container_name: qbittorrent
+    image: cr.hotio.dev/hotio/qbittorrent
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/qbittorrent/config:/config
+      - ${MEDIA_DIR}:/media
+      
+    # Config
+    restart: unless-stopped
+    
+       
+  # Unpackerr
+  unpackerr:
+    # Container
+    container_name: unpackerr
+    image: cr.hotio.dev/hotio/unpackerr
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=${TZ}
+      - UN_RADARR_0_URL=http://0.0.0.0:7878
+      - UN_RADARR_0_API_KEY=${RADARR_API_KEY}
+      - UN_SONARR_0_URL=http://0.0.0.0:8989
+      - UN_SONARR_0_API_KEY=${SONARR_API_KEY}
+      
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/unpackerr/config:/config
+      - ${MEDIA_DIR}:/media
+    
+    
+  # Tdarr
+  # For encoding media files
+  tdarr:
+    # Container
+    container_name: tdarr
+    image: ghcr.io/haveagitgat/tdarr:latest
+    
+    # Environment
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK_SET=002
+      - TZ=${TZ}
+      - serverIP=0.0.0.0
+      - serverPort=8266
+      - webUIPort=8265
+      - internalNode=true
+      - inContainer=true
+      
+    # Networking
+    network_mode: service:protonwire
+    
+    # Mounts
+    volumes:
+      - /etc/docker/tdarr/server:/app/server
+      - /etc/docker/tdarr/config:/app/configs
+      - /etc/docker/tdarr/logs:/app/logs
+      - ${MEDIA_DIR}:/media
+      - ${MEDIA_DIR}/tdarr/temp:/temp
+      
+    # Config
+    restart: unless-stopped
+
+
+  # Photoprism
+  photoprism:
+    # Container
+    container_name: photoprism
+    image: photoprism/photoprism:latest
+    depends_on:
+      - mariadb
+      
+    # Security
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+      
+    # Environment
+    environment:
+      - PHOTOPRISM_ORIGINALS_PATH=/photoprism/originals
+      - PHOTOPRISM_STORAGE_PATH=/photoprism/storage
+    
+      - PHOTOPRISM_ADMIN_USER=${PHOTOPRISM_USER}     # admin login username
+      - PHOTOPRISM_ADMIN_PASSWORD=${PHOTOPRISM_PASS} # initial admin password (8-72 characters)
+      - PHOTOPRISM_AUTH_MODE=password                # authentication mode (public, password)
+      - PHOTOPRISM_SITE_URL=http://localhost:2342/   # server URL in the format http(s)://domain.name(:port)/(path)
+      - PHOTOPRISM_DISABLE_TLS=false                 # disables HTTPS/TLS even if the site URL starts with https:// and a certificate is available
+      - PHOTOPRISM_DEFAULT_TLS=true                  # defaults to a self-signed HTTPS/TLS certificate if no other certificate is available
+      - PHOTOPRISM_ORIGINALS_LIMIT=5000              # file size limit for originals in MB (increase for high-res video)
+      - PHOTOPRISM_HTTP_COMPRESSION=gzip             # improves transfer speed and bandwidth utilization (none or gzip)
+      - PHOTOPRISM_LOG_LEVEL=info                    # log level=trace, debug, info, warning, error, fatal, or panic
+      - PHOTOPRISM_READONLY=false                    # do not modify originals directory (reduced functionality)
+      - PHOTOPRISM_EXPERIMENTAL=false                # enables experimental features
+      - PHOTOPRISM_DISABLE_CHOWN=false               # disables updating storage permissions via chmod and chown on startup
+      - PHOTOPRISM_DISABLE_WEBDAV=false              # disables built-in WebDAV server
+      - PHOTOPRISM_DISABLE_SETTINGS=false            # disables settings UI and API
+      - PHOTOPRISM_DISABLE_TENSORFLOW=false          # disables all features depending on TensorFlow
+      - PHOTOPRISM_DISABLE_FACES=false               # disables face detection and recognition (requires TensorFlow)
+      - PHOTOPRISM_DISABLE_CLASSIFICATION=false      # disables image classification (requires TensorFlow)
+      - PHOTOPRISM_DISABLE_VECTORS=false             # disables vector graphics support
+      - PHOTOPRISM_DISABLE_RAW=false                 # disables indexing and conversion of RAW images
+      - PHOTOPRISM_RAW_PRESETS=false                 # enables applying user presets when converting RAW images (reduces performance)
+      - PHOTOPRISM_JPEG_QUALITY=85                   # a higher value increases the quality and file size of JPEG images and thumbnails (25-100)
+      - PHOTOPRISM_DETECT_NSFW=false                 # automatically flags photos as private that MAY be offensive (requires TensorFlow)
+      - PHOTOPRISM_UPLOAD_NSFW=true                  # allows uploads that MAY be offensive (no effect without TensorFlow)
+      # - PHOTOPRISM_DATABASE_DRIVER=sqlite          # SQLite is an embedded database that doesn't require a server
+      - PHOTOPRISM_DATABASE_DRIVER=mysql             # use MariaDB 10.5+ or MySQL 8+ instead of SQLite for improved performance
+      - PHOTOPRISM_DATABASE_SERVER=mariadb:3306      # MariaDB or MySQL database server (hostname:port)
+      - PHOTOPRISM_DATABASE_NAME=photoprism          # MariaDB or MySQL database schema name
+      - PHOTOPRISM_DATABASE_USER=photoprism          # MariaDB or MySQL database user name
+      - PHOTOPRISM_DATABASE_PASSWORD=insecure        # MariaDB or MySQL database user password
+      - PHOTOPRISM_SITE_CAPTION=AI-Powered Photos App
+      - PHOTOPRISM_SITE_DESCRIPTION=""               # meta site description
+      - PHOTOPRISM_SITE_AUTHOR=""                    # meta site author
+      - PHOTOPRISM_UID=1000
+      - PHOTOPRISM_GID=1000
+      - PHOTOPRISM_UMASK=002
+      
+   # Networking
+    ports:
+      - 2342:2342
+    
+    # Share hardware devices with FFmpeg and TensorFlow (optional):
+    devices:
+     - /dev/dri:/dev/dri                         # Intel QSV
+    #  - "/dev/nvidia0:/dev/nvidia0"                 # Nvidia CUDA
+    #  - "/dev/nvidiactl:/dev/nvidiactl"
+    #  - "/dev/nvidia-modeset:/dev/nvidia-modeset"
+    #  - "/dev/nvidia-nvswitchctl:/dev/nvidia-nvswitchctl"
+    #  - "/dev/nvidia-uvm:/dev/nvidia-uvm"
+    #  - "/dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools"
+    #  - "/dev/video11:/dev/video11"                 # Video4Linux Video Encode Device (h264_v4l2m2m)
+    
+    # Mounts
+    working_dir: "/photoprism" # do not change or remove
+    volumes:
+      - ${MEDIA_DIR}/content/Photos:/photoprism/originals     # Original media files (DO NOT REMOVE)
+      - /etc/docker/photoprism/storage:/photoprism/storage    # *Writable* storage folder for cache, database, and sidecar files (DO NOT REMOVE)
+      
+    # Config
+    restart: unless-stopped
+    stop_grace_period: 10s
+    
+
+  # Maria Database Server (recommended by Photoprism)
+  # see https://docs.photoprism.app/getting-started/faq/#should-i-use-sqlite-mariadb-or-mysql
+  mariadb:
+    container_name: photoprism-mariadb
+    image: mariadb:10.11
+    command: mariadbd --innodb-buffer-pool-size=512M --transaction-isolation=READ-COMMITTED --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --max-connections=512 --innodb-rollback-on-timeout=OFF --innodb-lock-wait-timeout=120
+    
+    # Security
+    security_opt: # see https://github.com/MariaDB/mariadb-docker/issues/434#issuecomment-1136151239
+      - seccomp:unconfined
+      - apparmor:unconfined
+      
+    # Environment
+    environment:
+      - MARIADB_AUTO_UPGRADE=1
+      - MARIADB_INITDB_SKIP_TZINFO=1
+      - MARIADB_DATABASE=photoprism
+      - MARIADB_USER=photoprism
+      - MARIADB_PASSWORD=insecure
+      - MARIADB_ROOT_PASSWORD=insecure
+      
+    # Mounts
+    volumes:
+      - /etc/docker/photoprism/database:/var/lib/mysql
+      
+    # Config
+    restart: unless-stopped
+    stop_grace_period: 5s
+    
+    
+networks:
+  # This network is created by the nextcloud-aio-mastercontainer container and referenced by protonmail-bridge-nextcloud
+  nextcloud-aio:
+    external: true
+    
+volumes:
+  # This line is not allowed to be changed as otherwise the built-in backup solution will not work
+  nextcloud_aio_mastercontainer:
+    name: nextcloud_aio_mastercontainer
+
+  protonmail:
+    name: protonmail
+
+
