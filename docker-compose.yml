@@ -17,7 +17,8 @@ services:
     
     # Config
     restart: unless-stopped
-  
+
+
   # Nextcloud
   nextcloud:
     # Container
@@ -121,7 +122,8 @@ services:
     sysctls:
       net.ipv4.conf.all.rp_filter: 2 # sysctl net.ipv4.conf.all.rp_filter is mandatory!
       net.ipv6.conf.all.disable_ipv6: 1 # disables IPv6 as protonVPN does not support IPv6.
-    
+
+
   # Caddy Reverse Proxy
   # Used for:
   # 1) Setting the endpoint for ip.domain.tld
@@ -345,7 +347,6 @@ services:
       - UN_SONARR_0_URL=http://0.0.0.0:8989
       - UN_SONARR_0_API_KEY=${SONARR_API_KEY}
       
-      
     # Networking
     network_mode: service:protonwire
     
@@ -511,5 +512,3 @@ volumes:
 
   protonmail:
     name: protonmail
-
-
