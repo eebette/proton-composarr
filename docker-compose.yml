@@ -1,82 +1,66 @@
 version: "3"
+
+networks:
+  # This network is created by the nextcloud-aio-mastercontainer container and referenced by protonmail-bridge-nextcloud
+  nextcloud-aio:
+    external: true
+
+volumes:
+  # This line is not allowed to be changed as otherwise the built-in backup solution will not work
+  nextcloud_aio_mastercontainer:
+    name: nextcloud_aio_mastercontainer
+
 services:
-  
   # Cloudflare Tunnel to use as reverse proxy for external access to services
   cloudflared-tunnel:
     # Container
     container_name: cloudflared-tunnel
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run
-    
+
     # Environment
     environment:
       - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-      
+
     # Networking
     network_mode: host
-    
+
     # Config
     restart: unless-stopped
-
 
   # Nextcloud
   nextcloud:
     # Container
     container_name: nextcloud-aio-mastercontainer # This line is not allowed to be changed as otherwise AIO will not work correctly
     image: nextcloud/all-in-one:latest
-      
+
     # Environment
-    environment: 
+    environment:
       # Needed to work on Cloudflare Tunnel
       - APACHE_PORT=11000
       - SKIP_DOMAIN_VALIDATION=true
-      - APACHE_IP_BINDING=0.0.0.0 
-      
+      - APACHE_IP_BINDING=0.0.0.0
+
       # Config
       - NEXTCLOUD_DATADIR=${NEXTCLOUD_DATADIR} # ⚠️⚠️⚠️ Warning: do not set or adjust this value after the initial Nextcloud installation is done!
       - NEXTCLOUD_MEMORY_LIMIT=${NEXTCLOUD_MEMORY_LIMIT}
-      
+
       # Prefs
       - AIO_DISABLE_BACKUP_SECTION=true
-    
+
     # Mounts
     volumes:
       - nextcloud_aio_mastercontainer:/mnt/docker-aio-config # This line is not allowed to be changed as otherwise the built-in backup solution will not work
       - /var/run/docker.sock:/var/run/docker.sock:ro # If adjusting, don't forget to also set 'WATCHTOWER_DOCKER_SOCKET_PATH'!
-      
+
     # Networking
     ports:
       - 8080:8080
-      
-    # Config
-    restart: unless-stopped
-    
-    
-  # Proton Mail Bridge
-  # SMTP server for Nextcloud
-  protonmail-bridge-nextcloud:
-    # Container
-    container_name: protonmail-bridge-nextcloud
-    image: shenxn/protonmail-bridge
-    command: init
-    depends_on:
-      - nextcloud
-    
-    # Enables user login from shell
-    tty: true
-    stdin_open: true 
-    
-    # Networking
-    ports:
-      - 1025:25/tcp
-      - 1143:143/tcp
-    networks: 
-      - nextcloud-aio
-      
+
     # Config
     restart: unless-stopped
 
-    
+
   # Proton VPN Docker
   # Creates a network service for connecting to Proton VPN
   # Env PROTON_SERVER must be a user or system variable when running docker compose up
@@ -87,13 +71,13 @@ services:
     init: true
     cap_add:
       - NET_ADMIN # mandatory!
-    
+
     # Environment
     environment:
       - PROTONVPN_SERVER=${PROTON_SERVER}
       - DEBUG="0"
       - KILL_SWITCH="1"
-      
+
     # Mounts
     volumes:
       - type: tmpfs
@@ -102,81 +86,69 @@ services:
         source: private.key
         target: /etc/protonwire/private-key
         read_only: true
-        
+
     # Networking
     ports:
-      - 10025:25/tcp # SMTP
-      - 11043:143/tcp # IMAP
-      - 8000:80 # Caddy Proxy
+      # - 10025:25/tcp # ProtonMail Bridge SMTP
+      # - 11043:143/tcp # ProtonMail Bridge IMAP
+      - 58000:58000 # Caddy HTTP
+      - 54430:54430 # Caddy HTTPS
+      - 59999:59999 # whereami
+      - 58265:58265 # Tdarr
+      - 8266:8266
+      - 57878:57878 # Radarr
+      - 58989:58989 # Sonarr
+      - 56767:56767 # Bazarr
+      - 58080:58080 # qbittorrent
+      - 59117:59117 # Jackett
       - 5055:5055 # Jellyseerr
-      - 7878:7878 # Radarr
-      - 8989:8989 # Sonarr  
-      - 6767:6767 # Bazarr
-      - 8265:8265 # Tdarr
-      - 8888:8080 # qbittorrent
-      - 9117:9117 # Jackett
-      - 8299:8299 # Tdarr auth
-      
+      - 8096:8096 # Jellyfin
+
     # Config
     restart: unless-stopped
     sysctls:
       net.ipv4.conf.all.rp_filter: 2 # sysctl net.ipv4.conf.all.rp_filter is mandatory!
       net.ipv6.conf.all.disable_ipv6: 1 # disables IPv6 as protonVPN does not support IPv6.
 
-
   # Caddy Reverse Proxy
   # Used for:
-  # 1) Setting the endpoint for ip.domain.tld
-  # 2) Being the authentication layer for tdarr.domain.tld
-  caddy_proxy:
+  # 1) Setting the endpoint for ip.basingse.top
+  # 2) Being the authentication layer for tdarr.basingse.top
+  caddy:
     # Container
-    container_name: caddy_proxy
+    container_name: caddy
     image: caddy:latest
-    
+    build:
+      context: .
+      dockerfile: Dockerfile
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
-    volumes: 
+    volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      
+      - /etc/docker/caddy/config:/config
+
     # Config
     restart: unless-stopped
-    
-    
-  # Proton Mail Bridge
-  # SMTP server for services running on the VPN
-  protonmail-bridge-vpn:
-    # Container
-    container_name: protonmail-bridge-vpn
-    image: shenxn/protonmail-bridge
-    command: init
-    
-    # Enables user login from shell
-    tty: true
-    stdin_open: true 
-    
-    # Networking
-    network_mode: service:protonwire
-      
-    # Config
-    restart: unless-stopped
-    
+
+
 
   # Jellyseerr
   jellyseerr:
     # Container
     container_name: jellyseerr
     image: fallenbagel/jellyseerr:latest
-    
+
     # Environment
     environment:
       - LOG_LEVEL=info
       - TZ=${TZ}
-      
+
     # Networking
     network_mode: service:protonwire
-      
+
     # Mounts
     volumes:
       - /etc/docker/jellyseerr/config:/app/config
@@ -188,44 +160,45 @@ services:
     # Container
     container_name: jellyfin
     image: cr.hotio.dev/hotio/jellyfin
-    
+
     # Environment
     environment:
       - PUID=1000
       - PGID=1000
       - UMASK=002
       - TZ=${TZ}
-      
+
     # Networking
-    ports:
-      - 8096:8096
-      
+    network_mode: service:protonwire
+
     # Mounts
     volumes:
       - /etc/docker/jellyfin/config:/config
       - ${MEDIA_DIR}:/media
-      
+
   # Radarr
   radarr:
     # Container
     container_name: radarr
     image: cr.hotio.dev/hotio/radarr
-    
+    depends_on:
+      - caddy
+
     # Environment
     environment:
       - PUID=1000
       - PGID=1000
       - UMASK=002
       - TZ=${TZ}
-      
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/radarr/config:/config
       - ${MEDIA_DIR}:/media
-      
+
     # Config
     restart: unless-stopped
 
@@ -235,22 +208,24 @@ services:
     # Container
     container_name: sonarr
     image: cr.hotio.dev/hotio/sonarr
-    
+    depends_on:
+      - caddy
+
     # Environment
     environment:
       - PUID=1000
       - PGID=1000
       - UMASK=002
       - TZ=${TZ}
-      
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/sonarr/config:/config
       - ${MEDIA_DIR}:/media
-      
+
     # Config
     restart: unless-stopped
 
@@ -260,22 +235,24 @@ services:
     # Container
     container_name: bazarr
     image: cr.hotio.dev/hotio/bazarr
-    
+    depends_on:
+      - caddy
+
     # Environment
     environment:
       - PUID=1000
       - PGID=1000
       - UMASK=002
       - TZ=${TZ}
-      
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/bazarr/config:/config
       - ${MEDIA_DIR}:/media
-      
+
     # Config
     restart: unless-stopped
 
@@ -285,57 +262,61 @@ services:
     # Container
     container_name: jackett
     image: cr.hotio.dev/hotio/jackett
-    
+    depends_on:
+      - caddy
+
     # Environment
     environment:
       - PUID=1000
       - PGID=1000
       - UMASK=002
       - TZ=${TZ}
-      
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/jackett/config:/config
       - ${MEDIA_DIR}:/media
-      
+
     # Config
     restart: unless-stopped
-    
+
 
   # qbittorrent
   qbittorrent:
     # Container
     container_name: qbittorrent
     image: cr.hotio.dev/hotio/qbittorrent
-    
+    depends_on:
+      - caddy
+
     # Environment
     environment:
       - PUID=1000
       - PGID=1000
       - UMASK=002
       - TZ=${TZ}
-      
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/qbittorrent/config:/config
       - ${MEDIA_DIR}:/media
-      
+
     # Config
     restart: unless-stopped
-    
-       
+
+
   # Unpackerr
   unpackerr:
     # Container
     container_name: unpackerr
     image: cr.hotio.dev/hotio/unpackerr
-    
+
     # Environment
     environment:
       - PUID=1000
@@ -346,23 +327,26 @@ services:
       - UN_RADARR_0_API_KEY=${RADARR_API_KEY}
       - UN_SONARR_0_URL=http://0.0.0.0:8989
       - UN_SONARR_0_API_KEY=${SONARR_API_KEY}
-      
+
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/unpackerr/config:/config
       - ${MEDIA_DIR}:/media
-    
-    
+
+
   # Tdarr
   # For encoding media files
   tdarr:
     # Container
     container_name: tdarr
     image: ghcr.io/haveagitgat/tdarr:latest
-    
+    depends_on:
+      - caddy
+
     # Environment
     environment:
       - PUID=1000
@@ -374,18 +358,39 @@ services:
       - webUIPort=8265
       - internalNode=true
       - inContainer=true
-      
+      - nodeName=eric-basingse
+
     # Networking
     network_mode: service:protonwire
-    
+
     # Mounts
     volumes:
       - /etc/docker/tdarr/server:/app/server
       - /etc/docker/tdarr/config:/app/configs
       - /etc/docker/tdarr/logs:/app/logs
+      - /etc/docker/tdarr/transcode_cache:/temp
       - ${MEDIA_DIR}:/media
-      - ${MEDIA_DIR}/tdarr/temp:/temp
-      
+
+    # Config
+    restart: unless-stopped
+
+
+  # FlareSolverr
+  flaresolverr:
+    # Container
+    container_name: flaresolverr
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+
+    # Environment
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_HTML=${LOG_HTML:-false}
+      - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
+      - TZ=${TZ}
+
+    # Networking
+    network_mode: service:protonwire
+
     # Config
     restart: unless-stopped
 
@@ -397,17 +402,17 @@ services:
     image: photoprism/photoprism:latest
     depends_on:
       - mariadb
-      
+
     # Security
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
-      
+
     # Environment
     environment:
       - PHOTOPRISM_ORIGINALS_PATH=/photoprism/originals
       - PHOTOPRISM_STORAGE_PATH=/photoprism/storage
-    
+
       - PHOTOPRISM_ADMIN_USER=${PHOTOPRISM_USER}     # admin login username
       - PHOTOPRISM_ADMIN_PASSWORD=${PHOTOPRISM_PASS} # initial admin password (8-72 characters)
       - PHOTOPRISM_AUTH_MODE=password                # authentication mode (public, password)
@@ -443,14 +448,14 @@ services:
       - PHOTOPRISM_UID=1000
       - PHOTOPRISM_GID=1000
       - PHOTOPRISM_UMASK=002
-      
-   # Networking
+
+    # Networking
     ports:
       - 2342:2342
-    
+
     # Share hardware devices with FFmpeg and TensorFlow (optional):
     devices:
-     - /dev/dri:/dev/dri                         # Intel QSV
+      - /dev/dri:/dev/dri                         # Intel QSV
     #  - "/dev/nvidia0:/dev/nvidia0"                 # Nvidia CUDA
     #  - "/dev/nvidiactl:/dev/nvidiactl"
     #  - "/dev/nvidia-modeset:/dev/nvidia-modeset"
@@ -458,17 +463,17 @@ services:
     #  - "/dev/nvidia-uvm:/dev/nvidia-uvm"
     #  - "/dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools"
     #  - "/dev/video11:/dev/video11"                 # Video4Linux Video Encode Device (h264_v4l2m2m)
-    
+
     # Mounts
     working_dir: "/photoprism" # do not change or remove
     volumes:
       - ${MEDIA_DIR}/content/Photos:/photoprism/originals     # Original media files (DO NOT REMOVE)
       - /etc/docker/photoprism/storage:/photoprism/storage    # *Writable* storage folder for cache, database, and sidecar files (DO NOT REMOVE)
-      
+
     # Config
     restart: unless-stopped
     stop_grace_period: 10s
-    
+
 
   # Maria Database Server (recommended by Photoprism)
   # see https://docs.photoprism.app/getting-started/faq/#should-i-use-sqlite-mariadb-or-mysql
@@ -476,12 +481,12 @@ services:
     container_name: photoprism-mariadb
     image: mariadb:10.11
     command: mariadbd --innodb-buffer-pool-size=512M --transaction-isolation=READ-COMMITTED --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --max-connections=512 --innodb-rollback-on-timeout=OFF --innodb-lock-wait-timeout=120
-    
+
     # Security
     security_opt: # see https://github.com/MariaDB/mariadb-docker/issues/434#issuecomment-1136151239
       - seccomp:unconfined
       - apparmor:unconfined
-      
+
     # Environment
     environment:
       - MARIADB_AUTO_UPGRADE=1
@@ -490,25 +495,143 @@ services:
       - MARIADB_USER=photoprism
       - MARIADB_PASSWORD=insecure
       - MARIADB_ROOT_PASSWORD=insecure
-      
+
     # Mounts
     volumes:
       - /etc/docker/photoprism/database:/var/lib/mysql
-      
+
     # Config
     restart: unless-stopped
     stop_grace_period: 5s
-    
-    
-networks:
-  # This network is created by the nextcloud-aio-mastercontainer container and referenced by protonmail-bridge-nextcloud
-  nextcloud-aio:
-    external: true
-    
-volumes:
-  # This line is not allowed to be changed as otherwise the built-in backup solution will not work
-  nextcloud_aio_mastercontainer:
-    name: nextcloud_aio_mastercontainer
 
-  protonmail:
-    name: protonmail
+
+  # Cronicle
+  cronicle:
+    # Container
+    container_name: cronicle
+    image: bluet/cronicle-docker:latest
+    hostname: cronicle
+
+    # Environment
+    environment:
+      - TZ=${TZ}
+      - CRONICLE_base_app_url=https://cron.${BASE_URL}
+      - CRONICLE_email_from=${SMTP_EMAIL_FROM}
+      - CRONICLE_smtp_hostname=127.0.0.1
+      - CRONICLE_smtp_port=1025
+      - CRONICLE_ssl_cert_bypass=1
+      - CRONICLE_mail_options__secure=0
+      - CRONICLE_mail_options__auth__user=${SMTP_AUTH_USER}
+      - CRONICLE_mail_options__auth__pass=${SMTP_AUTH_PASS}
+      - CRONICLE_mail_options__connectionTimeout=10000
+      - CRONICLE_mail_options__greetingTimeout=10000
+      - CRONICLE_mail_options__socketTimeout=10000
+
+    # Network
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/docker/cronicle/ssh:/root/.ssh
+
+      - /etc/docker/cronicle/data:/opt/cronicle/data
+      - /etc/docker/cronicle/logs:/opt/cronicle/logs
+      - /etc/docker/cronicle/plugins:/opt/cronicle/plugins
+      - /etc/docker/cronicle/app:/app
+
+    # Config
+    restart: unless-stopped
+
+
+  # Proton Mail Bridge
+  # SMTP server for general use
+  protonmail-bridge:
+    # Container
+    container_name: protonmail-bridge
+    image: shenxn/protonmail-bridge
+    build:
+      context: .
+    depends_on:
+      - nextcloud
+    entrypoint: /scripts/entrypoint.sh
+
+    # Enables user login from shell
+    tty: true
+    stdin_open: true
+
+    # Networking
+    ports:
+      - 1025:25/tcp
+      - 1143:143/tcp
+
+    # Mounts
+    volumes:
+      - /etc/docker/protonmail-bridge/.password-store:/root/.password-store
+      - /etc/docker/protonmail-bridge/.config:/root/.config
+      - /etc/docker/protonmail-bridge/.gnupg:/root/.gnupg
+      - /etc/docker/protonmail-bridge/scripts:/scripts
+
+    # Config
+    restart: unless-stopped
+
+  # Proton Mail Bridge
+  # SMTP server for Nextcloud
+  protonmail-bridge-nextcloud:
+    # Container
+    container_name: protonmail-bridge-nextcloud
+    image: shenxn/protonmail-bridge
+    build:
+      context: .
+    depends_on:
+      - nextcloud
+      - protonmail-bridge
+    entrypoint: bash -c "sleep 12 && /scripts/entrypoint_minion.sh"
+
+    # Enables user login from shell
+    tty: true
+    stdin_open: true
+
+    # Networking
+    networks:
+      - nextcloud-aio
+
+    # Mounts
+    volumes:
+      - /etc/docker/protonmail-bridge/.password-store:/root/.password-store
+      - /etc/docker/protonmail-bridge/.config:/root/.config
+      - /etc/docker/protonmail-bridge/.gnupg:/root/.gnupg
+      - /etc/docker/protonmail-bridge/scripts:/scripts
+
+    # Config
+    restart: unless-stopped
+
+
+  # Proton Mail Bridge
+  # SMTP server for services running on the VPN
+  protonmail-bridge-vpn:
+    # Container
+    container_name: protonmail-bridge-vpn
+    image: shenxn/protonmail-bridge
+    build:
+      context: .
+    depends_on:
+      - protonmail-bridge
+    entrypoint: bash -c "sleep 12 && /scripts/entrypoint_minion.sh"
+
+    # Enables user login from shell
+    tty: true
+    stdin_open: true
+
+    # Networking
+    network_mode: service:protonwire
+
+    # Mounts
+    volumes:
+      - /etc/docker/protonmail-bridge/.password-store:/root/.password-store
+      - /etc/docker/protonmail-bridge/.config:/root/.config
+      - /etc/docker/protonmail-bridge/.gnupg:/root/.gnupg
+      - /etc/docker/protonmail-bridge/scripts:/scripts
+
+    # Config
+    restart: unless-stopped
