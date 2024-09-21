@@ -1,16 +1,20 @@
-version: "3"
-
 networks:
   # This network is created by the nextcloud-aio-mastercontainer container and referenced by protonmail-bridge-nextcloud
   nextcloud-aio:
     external: true
+
 
 volumes:
   # This line is not allowed to be changed as otherwise the built-in backup solution will not work
   nextcloud_aio_mastercontainer:
     name: nextcloud_aio_mastercontainer
 
+  # Ghost
+  ghost:
+  ghost_db:
+
 services:
+
   # Cloudflare Tunnel to use as reverse proxy for external access to services
   cloudflared-tunnel:
     # Container
@@ -27,6 +31,7 @@ services:
 
     # Config
     restart: unless-stopped
+
 
   # Nextcloud
   nextcloud:
@@ -83,20 +88,19 @@ services:
       - type: tmpfs
         target: /tmp
       - type: bind
-        source: private.key
+        source: /etc/docker/protonwire/keys/private.key
         target: /etc/protonwire/private-key
         read_only: true
+      - /etc/docker/protonwire/scripts:/scripts
 
     # Networking
     ports:
-      # - 10025:25/tcp # ProtonMail Bridge SMTP
-      # - 11043:143/tcp # ProtonMail Bridge IMAP
       - 58000:58000 # Caddy HTTP
       - 54430:54430 # Caddy HTTPS
       - 59999:59999 # whereami
-      - 58265:58265 # Tdarr
-      - 8266:8266
+      - 8266:8266 # Tdarr
       - 57878:57878 # Radarr
+      - 7878:7878 # Unpackerr
       - 58989:58989 # Sonarr
       - 56767:56767 # Bazarr
       - 58080:58080 # qbittorrent
@@ -110,6 +114,7 @@ services:
       net.ipv4.conf.all.rp_filter: 2 # sysctl net.ipv4.conf.all.rp_filter is mandatory!
       net.ipv6.conf.all.disable_ipv6: 1 # disables IPv6 as protonVPN does not support IPv6.
 
+
   # Caddy Reverse Proxy
   # Used for:
   # 1) Setting the endpoint for ip.basingse.top
@@ -117,9 +122,9 @@ services:
   caddy:
     # Container
     container_name: caddy
-    image: caddy:latest
+    image: caddy
     build:
-      context: .
+      context: /etc/docker/caddy
       dockerfile: Dockerfile
 
     # Networking
@@ -127,23 +132,24 @@ services:
 
     # Mounts
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - /etc/docker/caddy/Caddyfile:/etc/caddy/Caddyfile
       - /etc/docker/caddy/config:/config
 
     # Config
     restart: unless-stopped
 
 
-
   # Jellyseerr
   jellyseerr:
     # Container
     container_name: jellyseerr
-    image: fallenbagel/jellyseerr:latest
+    image: ghcr.io/hotio/jellyseerr:latest
 
     # Environment
     environment:
-      - LOG_LEVEL=info
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
       - TZ=${TZ}
 
     # Networking
@@ -151,15 +157,20 @@ services:
 
     # Mounts
     volumes:
-      - /etc/docker/jellyseerr/config:/app/config
+      - /etc/docker/jellyseerr/config:/config
       - ${MEDIA_DIR}:/media
+
+    # Config
+    restart: unless-stopped
 
 
   # Jellyfin
   jellyfin:
     # Container
     container_name: jellyfin
-    image: cr.hotio.dev/hotio/jellyfin
+    image: ghcr.io/hotio/jellyfin:latest
+    depends_on:
+      - caddy
 
     # Environment
     environment:
@@ -176,11 +187,15 @@ services:
       - /etc/docker/jellyfin/config:/config
       - ${MEDIA_DIR}:/media
 
+    # Config
+    restart: unless-stopped
+
+
   # Radarr
   radarr:
     # Container
     container_name: radarr
-    image: cr.hotio.dev/hotio/radarr
+    image: ghcr.io/hotio/radarr:latest
     depends_on:
       - caddy
 
@@ -207,7 +222,7 @@ services:
   sonarr:
     # Container
     container_name: sonarr
-    image: cr.hotio.dev/hotio/sonarr
+    image: ghcr.io/hotio/sonarr:latest
     depends_on:
       - caddy
 
@@ -234,7 +249,7 @@ services:
   bazarr:
     # Container
     container_name: bazarr
-    image: cr.hotio.dev/hotio/bazarr
+    image: ghcr.io/hotio/bazarr:latest
     depends_on:
       - caddy
 
@@ -261,7 +276,7 @@ services:
   jackett:
     # Container
     container_name: jackett
-    image: cr.hotio.dev/hotio/jackett
+    image: ghcr.io/hotio/jackett:latest
     depends_on:
       - caddy
 
@@ -288,7 +303,7 @@ services:
   qbittorrent:
     # Container
     container_name: qbittorrent
-    image: cr.hotio.dev/hotio/qbittorrent
+    image: ghcr.io/hotio/qbittorrent:latest
     depends_on:
       - caddy
 
@@ -315,7 +330,7 @@ services:
   unpackerr:
     # Container
     container_name: unpackerr
-    image: cr.hotio.dev/hotio/unpackerr
+    image: ghcr.io/hotio/unpackerr:latest
 
     # Environment
     environment:
@@ -336,6 +351,9 @@ services:
     volumes:
       - /etc/docker/unpackerr/config:/config
       - ${MEDIA_DIR}:/media
+
+    # Config
+    restart: unless-stopped
 
 
   # Tdarr
@@ -416,9 +434,9 @@ services:
       - PHOTOPRISM_ADMIN_USER=${PHOTOPRISM_USER}     # admin login username
       - PHOTOPRISM_ADMIN_PASSWORD=${PHOTOPRISM_PASS} # initial admin password (8-72 characters)
       - PHOTOPRISM_AUTH_MODE=password                # authentication mode (public, password)
-      - PHOTOPRISM_SITE_URL=http://localhost:2342/   # server URL in the format http(s)://domain.name(:port)/(path)
-      - PHOTOPRISM_DISABLE_TLS=false                 # disables HTTPS/TLS even if the site URL starts with https:// and a certificate is available
-      - PHOTOPRISM_DEFAULT_TLS=true                  # defaults to a self-signed HTTPS/TLS certificate if no other certificate is available
+      - PHOTOPRISM_SITE_URL=https://photoprism.${BASE_URL}
+      - PHOTOPRISM_DISABLE_TLS=true                  # disables HTTPS/TLS even if the site URL starts with https:// and a certificate is available
+      # - PHOTOPRISM_DEFAULT_TLS=true                  # defaults to a self-signed HTTPS/TLS certificate if no other certificate is available
       - PHOTOPRISM_ORIGINALS_LIMIT=5000              # file size limit for originals in MB (increase for high-res video)
       - PHOTOPRISM_HTTP_COMPRESSION=gzip             # improves transfer speed and bandwidth utilization (none or gzip)
       - PHOTOPRISM_LOG_LEVEL=info                    # log level=trace, debug, info, warning, error, fatal, or panic
@@ -526,6 +544,10 @@ services:
       - CRONICLE_mail_options__connectionTimeout=10000
       - CRONICLE_mail_options__greetingTimeout=10000
       - CRONICLE_mail_options__socketTimeout=10000
+      - CRONICLE_NODE_TLS_REJECT_UNAUTHORIZED=0
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - CRONICLE_web_hook_custom_opts__rejectUnauthorized=0
+      - CRONICLE_web_hook_ssl_cert_bypass=0
 
     # Network
     network_mode: host
@@ -550,11 +572,9 @@ services:
     # Container
     container_name: protonmail-bridge
     image: shenxn/protonmail-bridge
-    build:
-      context: .
     depends_on:
       - nextcloud
-    entrypoint: /scripts/entrypoint.sh
+    entrypoint: sh -c "/scripts/entrypoint.sh"
 
     # Enables user login from shell
     tty: true
@@ -562,18 +582,19 @@ services:
 
     # Networking
     ports:
+      # SMTP
       - 1025:25/tcp
+      # IMAP
       - 1143:143/tcp
 
     # Mounts
     volumes:
-      - /etc/docker/protonmail-bridge/.password-store:/root/.password-store
-      - /etc/docker/protonmail-bridge/.config:/root/.config
-      - /etc/docker/protonmail-bridge/.gnupg:/root/.gnupg
       - /etc/docker/protonmail-bridge/scripts:/scripts
+      - /etc/docker/protonmail-bridge/root:/root
 
     # Config
     restart: unless-stopped
+
 
   # Proton Mail Bridge
   # SMTP server for Nextcloud
@@ -581,8 +602,6 @@ services:
     # Container
     container_name: protonmail-bridge-nextcloud
     image: shenxn/protonmail-bridge
-    build:
-      context: .
     depends_on:
       - nextcloud
       - protonmail-bridge
@@ -598,10 +617,8 @@ services:
 
     # Mounts
     volumes:
-      - /etc/docker/protonmail-bridge/.password-store:/root/.password-store
-      - /etc/docker/protonmail-bridge/.config:/root/.config
-      - /etc/docker/protonmail-bridge/.gnupg:/root/.gnupg
       - /etc/docker/protonmail-bridge/scripts:/scripts
+      - /etc/docker/protonmail-bridge/nextcloud:/root
 
     # Config
     restart: unless-stopped
@@ -613,8 +630,6 @@ services:
     # Container
     container_name: protonmail-bridge-vpn
     image: shenxn/protonmail-bridge
-    build:
-      context: .
     depends_on:
       - protonmail-bridge
     entrypoint: bash -c "sleep 12 && /scripts/entrypoint_minion.sh"
@@ -628,10 +643,277 @@ services:
 
     # Mounts
     volumes:
-      - /etc/docker/protonmail-bridge/.password-store:/root/.password-store
-      - /etc/docker/protonmail-bridge/.config:/root/.config
-      - /etc/docker/protonmail-bridge/.gnupg:/root/.gnupg
       - /etc/docker/protonmail-bridge/scripts:/scripts
+      - /etc/docker/protonmail-bridge/vpn:/root
+
+    # Config
+    restart: unless-stopped
+
+
+  # alertmanager for Prometheus
+  alertmanager:
+    # Container
+    container_name: alertmanager
+    image: prom/alertmanager
+
+    # Networking
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /etc/docker/alertmanager:/etc/alertmanager
+
+    # Command
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.conf'
+
+
+  # Prometheus
+  prometheus:
+    # Container
+    container_name: prometheus
+    image: prom/prometheus
+    user: "1000"
+
+    # Networking
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /etc/docker/prometheus/:/prometheus
+
+    # Command
+    command:
+      - '--config.file=/prometheus/prometheus.yml'
+      - '--web.config.file=/prometheus/web-config.yml'
+
+    # Config
+    restart: unless-stopped
+
+
+  # Grafana
+  grafana:
+    # Container
+    container_name: grafana
+    image: grafana/grafana
+    user: "1000"
+
+    # Networking
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /etc/docker/grafana/datasources.yml:/etc/grafana/provisioning/datasources/all.yaml
+      - /etc/docker/grafana/config.ini:/etc/grafana/config.ini
+      - /etc/docker/grafana/grafana:/var/lib/grafana
+
+    # Command
+    command:
+      - '--config=/etc/grafana/config.ini'
+
+    # Environment
+    environment:
+      - GF_SMTP_PASSWORD=${SMTP_AUTH_PASS}
+
+    # Config
+    restart: unless-stopped
+
+
+  # Node Exporter for system metrics
+  node-exporter:
+    # Container
+    container_name: node-exporter
+    image: prom/node-exporter:latest
+
+    # Mounts
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+
+    # Command
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+
+    # Networking
+    network_mode: host
+
+    # Config
+    restart: unless-stopped
+
+
+  # Prometheus Push Gateway
+  pushgateway:
+    # Container
+    image: prom/pushgateway
+    container_name: pushgateway
+
+    # Networking
+    ports:
+      - 9091:9091
+
+    # Config
+    restart: unless-stopped
+
+
+  # Process exporter for system metrics
+  process-exporter:
+    # Container
+    container_name: process-exporter
+    image: process-exporter
+    build:
+      context: /etc/docker/process-exporter
+      dockerfile: Dockerfile
+
+    # Networking
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /etc/docker/process-exporter/ssh:/root/.ssh
+
+    # Config
+    restart: unless-stopped
+
+
+  # Gotify
+  gotify:
+    # Container
+    container_name: gotify
+    image: gotify/server
+
+    # Networking
+    ports:
+      - 4090:80
+
+    # Mounts
+    volumes:
+      - "/etc/docker/gotify:/app/data"
+
+    # Config
+    restart: unless-stopped
+
+
+  # Webhook
+  webhook:
+    container_name: webhook
+    image: thecatlady/webhook
+
+    # Command
+    command: -template -verbose -hooks=hooks.json -hotreload
+
+    # Environment
+    environment:
+      - HOOK_TOKEN=${HOOK_TOKEN}
+      - HOOK_SECRET=${HOOK_SECRET}
+
+    # Networking
+    ports:
+      - 9000:9000
+
+    # Mounts
+    volumes:
+      - /etc/docker/webhook:/config
+
+    # Config
+    restart: unless-stopped
+
+
+  # Bitwarden REST API Server
+  bitwarden-rest-api-server:
+    # Container
+    container_name: bitwarden-rest-api-server
+    image: ebette1/bitwarden-rest-api-server:latest
+
+    # Environment
+    environment:
+      - BW_CLIENTID=${BW_CLIENTID}
+      - BW_CLIENTSECRET=${BW_CLIENTSECRET}
+      # - BITWARDENCLI_DEBUG=true
+
+    # Networking
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /etc/docker/bitwarden-rest-api-server:/root/.config
+
+    # Config
+    restart: no
+
+
+  # Badge Server
+  badge-server:
+    # Container
+    container_name: badge-server
+    image: ebette1/badge-server:latest
+
+    # Networking
+    ports:
+      - 3031:3031
+      - 9191:9191
+
+    # Mounts
+    volumes:
+      - /etc/docker/bank-exporter/bank_scrapers-tests:/tests/bank_scrapers
+
+    # Config
+    restart: unless-stopped
+
+
+  # Ghost
+  ghost:
+    # Container
+    container_name: ghost
+    image: ghost:5-alpine
+
+    # Environment
+    environment:
+      database__client: mysql
+      database__connection__host: 0.0.0.0
+      database__connection__port: 9999
+      database__connection__user: root
+      database__connection__password: ghost
+      database__connection__database: ghost
+      url: https://ghost.${BASE_URL}
+      mail__transport: SMTP
+      mail__options__host: 0.0.0.0
+      mail__options__port: 1025
+      mail__options__auth__user: ${SMTP_AUTH_USER}
+      mail__options__auth__pass: ${SMTP_AUTH_PASS}
+      mail__options__from: ${SMTP_EMAIL_FROM}
+
+    # Networking
+    network_mode: host
+
+    # Mounts
+    volumes:
+      - /etc/docker/ghost/content:/var/lib/ghost/content
+
+    # Config
+    restart: unless-stopped
+    depends_on:
+      - ghost_db
+
+
+  ghost_db:
+    container_name: ghost_db
+    image: mysql:8.0
+
+    # Environment
+    environment:
+      MYSQL_ROOT_PASSWORD: ghost
+
+    # Networking
+    ports:
+      - 9999:3306
+
+    # Mounts
+    volumes:
+      - /etc/docker/ghost/db:/var/lib/mysql
 
     # Config
     restart: unless-stopped
